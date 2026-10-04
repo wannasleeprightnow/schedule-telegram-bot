@@ -11,7 +11,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from src.application.schedule_service import ScheduleService, render_schedule
 from src.application.user_service import UserService
-from src.presentation.telegram.keyboards import main_keyboard, settings_keyboard
+from src.presentation.telegram.keyboards import settings_keyboard
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -54,16 +54,18 @@ def register_notification_handlers(router: Router, schedules: ScheduleService, u
         users.save_profile(callback.from_user.id, profile)
         if profile["notification_enabled"]:
             await state.set_state(NotificationTime.value)
-            await callback.message.answer("Введите время уведомления в формате ЧЧ:ММ (например, 21:00):")
+            await _replace_screen(callback.message, "Введите время уведомления в формате ЧЧ:ММ (например, 21:00):")
+            await _remember_time_prompt(state, callback.message)
         else:
             scheduler.remove_job(f"daily-{callback.from_user.id}") if scheduler.get_job(f"daily-{callback.from_user.id}") else None
-            await callback.message.answer("Ежедневные уведомления выключены.", reply_markup=main_keyboard())
+            await _replace_screen(callback.message, "Ежедневные уведомления выключены.")
         await callback.answer()
 
     @router.callback_query(F.data == "notifications:time")
     async def change_notification_time(callback: CallbackQuery, state: FSMContext):
         await state.set_state(NotificationTime.value)
-        await callback.message.answer("Введите время уведомления в формате ЧЧ:ММ (например, 21:00):")
+        await _replace_screen(callback.message, "Введите время уведомления в формате ЧЧ:ММ (например, 21:00):")
+        await _remember_time_prompt(state, callback.message)
         await callback.answer()
 
     @router.message(NotificationTime.value, F.text)
@@ -71,19 +73,44 @@ def register_notification_handlers(router: Router, schedules: ScheduleService, u
         try:
             notification_time = datetime.strptime(message.text.strip(), "%H:%M").time()
         except ValueError:
-            await message.answer("Укажите время как ЧЧ:ММ, например 21:00.")
+            await _update_time_prompt(message, state, "Укажите время как ЧЧ:ММ, например 21:00.")
             return
         profile = users.get(message.from_user.id)
         if not profile:
+            await _update_time_prompt(message, state, "Сначала настройте профиль: /start")
             await state.clear()
             return
         profile["notification_time"] = notification_time.strftime("%H:%M")
         users.save_profile(message.from_user.id, profile)
         if profile.get("notification_enabled"):
             schedule_user_job(scheduler, message.bot, schedules, users, message.from_user.id, timezone)
-        await state.clear()
         status = "Уведомления включены" if profile.get("notification_enabled") else "Время сохранено; уведомления пока выключены"
-        await message.answer(f"{status}. Время: {profile['notification_time']}.", reply_markup=main_keyboard())
+        await _update_time_prompt(message, state, f"{status}. Время: {profile['notification_time']}.")
+        await state.clear()
+
+
+async def _replace_screen(message: Message, text: str) -> None:
+    try:
+        await message.edit_text(text, reply_markup=None)
+    except Exception:
+        await message.answer(text)
+
+
+async def _remember_time_prompt(state: FSMContext, prompt: Message) -> None:
+    await state.update_data(time_prompt_chat_id=prompt.chat.id, time_prompt_message_id=prompt.message_id)
+
+
+async def _update_time_prompt(message: Message, state: FSMContext, text: str) -> None:
+    data = await state.get_data()
+    chat_id = data.get("time_prompt_chat_id")
+    message_id = data.get("time_prompt_message_id")
+    if chat_id is not None and message_id is not None:
+        try:
+            await message.bot.edit_message_text(text=text, chat_id=chat_id, message_id=message_id, reply_markup=None)
+            return
+        except Exception:
+            pass
+    await message.answer(text)
 
 
 def schedule_user_job(scheduler: AsyncIOScheduler, bot, schedules: ScheduleService, users: UserService, user_id: int, timezone: str) -> None:

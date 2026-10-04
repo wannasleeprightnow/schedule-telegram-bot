@@ -35,21 +35,21 @@ def register_schedule_handlers(router: Router, schedules: ScheduleService, users
     @router.callback_query(F.data.startswith("type:"))
     async def choose_type(callback: CallbackQuery, state: FSMContext):
         if callback.data == "profile:edit":
-            await callback.message.answer("Выберите тип расписания:", reply_markup=profile_types())
+            await _replace_screen(callback.message, "Выберите тип расписания:", reply_markup=profile_types())
             await callback.answer()
             return
         category = callback.data.split(":", 1)[1]
         try:
             classes = (await schedules.available_classes()).get(category, [])
         except Exception:
-            await callback.message.answer("⚠️ Не удалось загрузить список классов. Попробуйте позже.")
+            await _replace_screen(callback.message, "⚠️ Не удалось загрузить список классов. Попробуйте позже.", reply_markup=profile_types())
             await callback.answer()
             return
         if not classes:
             await callback.answer("Варианты не найдены в книге", show_alert=True)
             return
         await state.update_data(schedule_type=category, classes=classes)
-        await callback.message.answer("Выберите класс или курс:", reply_markup=choice_keyboard("class", classes))
+        await _replace_screen(callback.message, "Выберите класс или курс:", reply_markup=choice_keyboard("class", classes))
         await callback.answer()
 
     @router.callback_query(F.data.startswith("class:"))
@@ -64,9 +64,9 @@ def register_schedule_handlers(router: Router, schedules: ScheduleService, users
         await state.update_data(class_course=class_course)
         groups = await _groups_for(schedules, class_course)
         if groups:
-            await callback.message.answer("Выберите группу или пропустите этот шаг:", reply_markup=choice_keyboard("group", groups, include_skip=True))
+            await _replace_screen(callback.message, "Выберите группу или пропустите этот шаг:", reply_markup=choice_keyboard("group", groups, include_skip=True))
         else:
-            await callback.message.answer("Выберите пол для точного поиска зала в расписании:", reply_markup=gender_keyboard())
+            await _replace_screen(callback.message, "Выберите пол для точного поиска зала в расписании:", reply_markup=gender_keyboard())
         await callback.answer()
 
     @router.callback_query(F.data.startswith("group:"))
@@ -78,7 +78,7 @@ def register_schedule_handlers(router: Router, schedules: ScheduleService, users
             index = int(callback.data.split(":", 1)[1])
             group = groups[index] if index < len(groups) else None
         await state.update_data(group=group)
-        await callback.message.answer("Выберите пол для точного поиска зала в расписании:", reply_markup=gender_keyboard())
+        await _replace_screen(callback.message, "Выберите пол для точного поиска зала в расписании:", reply_markup=gender_keyboard())
         await callback.answer()
 
     @router.callback_query(F.data.startswith("gender:"))
@@ -95,7 +95,8 @@ def register_schedule_handlers(router: Router, schedules: ScheduleService, users
                 return
             profile["gender"] = gender
             users.save_profile(callback.from_user.id, profile)
-            await callback.message.answer("Пол сохранён для поиска зала.", reply_markup=main_keyboard())
+            await _replace_screen(callback.message, "Пол сохранён для поиска зала.")
+            await callback.message.answer("Выберите действие:", reply_markup=main_keyboard())
             await state.clear()
             await callback.answer()
             return
@@ -142,10 +143,18 @@ async def _save_profile(callback: CallbackQuery, users: UserService, state: FSMC
             "notification_time": existing.get("notification_time", "21:00"),
         })
     except (ValueError, PermissionError) as exc:
-        await callback.message.answer(str(exc))
+        await _replace_screen(callback.message, str(exc), reply_markup=gender_keyboard())
         return
     await state.clear()
-    await callback.message.answer("Профиль сохранён.", reply_markup=main_keyboard())
+    await _replace_screen(callback.message, "Профиль сохранён.")
+    await callback.message.answer("Выберите действие:", reply_markup=main_keyboard())
+
+
+async def _replace_screen(message: Message, text: str, reply_markup=None) -> None:
+    try:
+        await message.edit_text(text, reply_markup=reply_markup)
+    except Exception:
+        await message.answer(text, reply_markup=reply_markup)
 
 
 async def _send_schedule(message: Message, schedules: ScheduleService, users: UserService, requested_date: date):
