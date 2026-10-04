@@ -153,11 +153,23 @@ async def _send_schedule(message: Message, schedules: ScheduleService, users: Us
     if not profile:
         await message.answer("Сначала настройте профиль: /start")
         return
+
+    loading_message = await message.answer("⏳ Получаю расписание…")
     try:
         schedule = await schedules.get_schedule(requested_date, profile["class_course"], profile.get("group"), profile.get("gender"))
-        await message.answer(render_schedule(schedule), reply_markup=main_keyboard())
+        response_text = render_schedule(schedule)
+        response_markup = main_keyboard()
     except Exception as exc:
-        await message.answer(f"⚠️ Не удалось получить расписание.\nПричина: {exc}")
+        response_text = f"⚠️ Не удалось получить расписание.\nПричина: {exc}"
+        response_markup = None
+
+    try:
+        await loading_message.delete()
+    except Exception:
+        # A failed cleanup should not prevent the user from receiving the result.
+        pass
+
+    await message.answer(response_text, reply_markup=response_markup)
 
 
 async def _groups_for(schedules: ScheduleService, class_course: str) -> list[str]:
